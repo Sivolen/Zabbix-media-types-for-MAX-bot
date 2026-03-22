@@ -1,0 +1,153 @@
+zabbix_export:
+  version: '7.4'
+  media_types:
+    - name: MAX
+      type: WEBHOOK
+      parameters:
+        - name: ApiUrl
+          value: 'https://platform-api.max.ru'
+        - name: HTTPProxy
+          value:
+        - name: Message
+          value: '{ALERT.MESSAGE}'
+        - name: Subject
+          value: '{ALERT.SUBJECT}'
+        - name: To
+          value: '{ALERT.SENDTO}'
+        - name: Token
+          value:
+      script: |
+        var MaxMessenger = {
+            apiUrl: null,
+            token: null,
+            to: null,           // chat_id или user_id
+            message: null,
+            subject: null,
+            proxy: null,
+            isUser: false,      // true = отправляем пользователю, false = в чат
+        
+            sendMessage: function () {
+                // Формируем URL с параметром получателя
+                var param = MaxMessenger.isUser ? 'user_id' : 'chat_id';
+                // var url = MaxMessenger.apiUrl + '/messages?' + param + '=' + encodeURIComponent(MaxMessenger.to);
+                var url = MaxMessenger.apiUrl + '/messages?chat_id=' + encodeURIComponent(MaxMessenger.to);
+        
+                // Тело запроса — плоская структура, текст в корне
+                var payload = {
+                    text: (MaxMessenger.subject ? MaxMessenger.subject + '\n' : '') + MaxMessenger.message
+                    // При необходимости можно добавить:
+                    // "format": "html",
+                    // "disable_link_preview": true,
+                    // "notify": true
+                };
+        
+                var request = new HttpRequest();
+                var data = JSON.stringify(payload);
+        
+                if (MaxMessenger.proxy) {
+                    request.setProxy(MaxMessenger.proxy);
+                }
+        
+                // Заголовки
+                request.addHeader('Content-Type: application/json; charset=utf-8');
+                request.addHeader('Accept: application/json');
+                request.addHeader('Authorization: ' + MaxMessenger.token);  // Без "Bearer"!
+        
+                // Логирование
+                Zabbix.log(4, '[Max] POST ' + url);
+                Zabbix.log(4, '[Max] Body: ' + data);
+        
+                var response = request.post(url, data);
+                var status = request.getStatus();
+                
+                Zabbix.log(4, '[Max] HTTP ' + status + ' | Response: ' + response);
+        
+                if (status >= 200 && status < 300) {
+                    return 'OK';
+                } else {
+                    throw 'HTTP ' + status + ': ' + response;
+                }
+            }
+        };
+        
+        try {
+            var params = JSON.parse(value);
+            
+            // Проверка обязательных параметров
+            ['ApiUrl', 'Token', 'To', 'Subject', 'Message'].forEach(function(p) {
+                if (!params[p]) throw 'Parameter "' + p + '" is missing';
+            });
+        
+            MaxMessenger.apiUrl = params.ApiUrl;
+            MaxMessenger.token = params.Token;
+            MaxMessenger.to = params.To;
+            MaxMessenger.subject = params.Subject;
+            MaxMessenger.message = params.Message;
+            
+            // Опционально: флаг отправки пользователю (по умолчанию — чат)
+            if (params.IsUser && params.IsUser.toLowerCase() === 'true') {
+                MaxMessenger.isUser = true;
+            }
+        
+            MaxMessenger.sendMessage();
+            return 'OK';
+        }
+        catch (error) {
+            Zabbix.log(4, '[Max ERROR] ' + error);
+            throw 'Sending failed: ' + error + '.';
+        }
+      message_templates:
+        - event_source: TRIGGERS
+          operation_mode: PROBLEM
+          subject: 'Problem: {EVENT.NAME}'
+          message: |
+            Problem started at {EVENT.TIME} on {EVENT.DATE}
+            Problem name: {EVENT.NAME}
+            Host: {HOST.NAME}
+            HostDesc: {HOST.DESCRIPTION}
+            Severity: {EVENT.SEVERITY}
+            Operational data: {EVENT.OPDATA}
+            Original problem ID: {EVENT.ID}
+            {TRIGGER.URL}
+        - event_source: TRIGGERS
+          operation_mode: RECOVERY
+          subject: 'Resolved in {EVENT.DURATION}: {EVENT.NAME}'
+          message: |
+            Problem has been resolved at {EVENT.RECOVERY.TIME} on {EVENT.RECOVERY.DATE}
+            Problem name: {EVENT.NAME}
+            Problem duration: {EVENT.DURATION}
+            Host: {HOST.NAME}
+            HostDesc: {HOST.DESCRIPTION}
+            Severity: {EVENT.SEVERITY}
+            Original problem ID: {EVENT.ID}
+            {TRIGGER.URL}
+        - event_source: TRIGGERS
+          operation_mode: UPDATE
+          subject: 'Updated problem in {EVENT.AGE}: {EVENT.NAME}'
+          message: |
+            {USER.FULLNAME} {EVENT.UPDATE.ACTION} problem at {EVENT.UPDATE.DATE} {EVENT.UPDATE.TIME}.
+            {EVENT.UPDATE.MESSAGE}
+            
+            Current problem status is {EVENT.STATUS}, age is {EVENT.AGE}, acknowledged: {EVENT.ACK.STATUS}.
+        - event_source: DISCOVERY
+          operation_mode: PROBLEM
+          subject: 'Discovery: {DISCOVERY.DEVICE.STATUS} {DISCOVERY.DEVICE.IPADDRESS}'
+          message: |
+            Discovery rule: {DISCOVERY.RULE.NAME}
+            
+            Device IP: {DISCOVERY.DEVICE.IPADDRESS}
+            Device DNS: {DISCOVERY.DEVICE.DNS}
+            Device status: {DISCOVERY.DEVICE.STATUS}
+            Device uptime: {DISCOVERY.DEVICE.UPTIME}
+            
+            Device service name: {DISCOVERY.SERVICE.NAME}
+            Device service port: {DISCOVERY.SERVICE.PORT}
+            Device service status: {DISCOVERY.SERVICE.STATUS}
+            Device service uptime: {DISCOVERY.SERVICE.UPTIME}
+        - event_source: AUTOREGISTRATION
+          operation_mode: PROBLEM
+          subject: 'Autoregistration: {HOST.HOST}'
+          message: |
+            Host name: {HOST.HOST}
+            Host IP: {HOST.IP}
+            Agent port: {HOST.PORT}
